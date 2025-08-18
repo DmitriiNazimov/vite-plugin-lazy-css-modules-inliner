@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-lazy-css-modules-inliner",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Vite plugin to inline CSS Modules for dynamically imported code.",
   "license": "MIT",
   "author": "DmitriiNazimov",
