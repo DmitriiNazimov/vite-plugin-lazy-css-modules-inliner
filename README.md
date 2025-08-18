@@ -4,6 +4,12 @@ Note: A Russian version of this README is available below.
 
 A Vite plugin that enables true on-demand CSS for dynamically imported code by virtualizing CSS Modules. It prevents lazy components' styles from being bundled into the page CSS and injects them only when the corresponding JS is loaded.
 
+## Installation
+
+`npm i vite-plugin-lazy-css-modules-inliner --save-dev`
+
+Example of usages see in section `Examples`.
+
 ## Supported stacks
 
 - Vite (vanilla)
@@ -103,6 +109,12 @@ export default defineConfig({
 # vite-plugin-lazy-css-modules-inliner (Русская версия)
 
 Плагин Vite, виртуализирующий CSS Modules для динамически импортируемого кода. Стили ленивых модулей не попадают в общий CSS страницы и инжектятся только при загрузке соответствующего JS.
+
+## Установка
+
+`npm i vite-plugin-lazy-css-modules-inliner --save-dev`
+
+Примеры использования см. в секции `Examples`.
 
 ## Поддержка
 
