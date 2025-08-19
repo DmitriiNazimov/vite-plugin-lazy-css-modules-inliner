@@ -160,7 +160,8 @@ export function viteLazyCssModulesInliner({
                 return getVirtualCssModuleId(childModuleId);
             }
 
-            return childModuleId;
+            // For non-CSS keep original resolved id to preserve queries like ?url
+            return resolvedModule.id;
         },
 
         // Detect dynamic roots by checking getModuleInfo().dynamicImporters and dynamicallyImportedIds
