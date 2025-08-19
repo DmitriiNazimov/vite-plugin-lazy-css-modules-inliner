@@ -223,7 +223,12 @@ export function viteLazyCssModulesInliner({
             }
 
             try {
-                const { css, tokens } = await processCss({ originalId, cssModulesConfig, isDev: Boolean(isDev), postcssPlugins });
+                const { css, tokens } = await processCss({
+                    originalId,
+                    cssModulesConfig,
+                    isDev: Boolean(isDev),
+                    postcssPlugins,
+                });
                 return await generateVirtualModuleCode(css, tokens, originalId, isDev!);
             } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err);

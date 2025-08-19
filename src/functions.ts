@@ -33,9 +33,7 @@ export function getOriginalIdFromVirtual(virtualId: string): string {
         return virtualId;
     }
 
-    return virtualId
-        .slice(VIRTUAL_PREFIX.length)
-        .replace(/\.js$/, '');
+    return virtualId.slice(VIRTUAL_PREFIX.length).replace(/\.js$/, '');
 }
 
 // Build a unique virtual id for CSS file, optionally namespaced by importer id to
@@ -122,8 +120,8 @@ export async function processCss({
     originalId,
     cssModulesConfig,
     isDev,
-    postcssPlugins = []
-    }: ProcessCssParams): Promise<ProcessCssResult> {
+    postcssPlugins = [],
+}: ProcessCssParams): Promise<ProcessCssResult> {
     const cssSource = await readFile(originalId, 'utf-8');
     const tokens: Record<string, string> = {};
     const plugins: AcceptedPlugin[] = postcssPlugins.filter(Boolean);
@@ -132,7 +130,7 @@ export async function processCss({
     // Add css-modules plugin if needed
     const hasPostcssModulesInConfig = pluginIds.has(CSS_MODULES_PLUGIN_ID);
     const isModule = isCssModuleFile(originalId) && Boolean(cssModulesConfig);
-    
+
     if (isModule && !hasPostcssModulesInConfig && cssModulesConfig) {
         plugins.push(
             postcssModules({
@@ -204,25 +202,25 @@ export function hasAllowedModule(chunk: RenderedChunk, includedPathes: string[],
 
 export async function resolvePostcssPlugins(viteConfig: ResolvedConfig): Promise<AcceptedPlugin[]> {
     const postcssConfig = viteConfig?.css?.postcss;
-    
-    if (!postcssConfig) { 
+
+    if (!postcssConfig) {
         return [];
     }
 
     const postcssConfigIsPath = typeof postcssConfig === 'string';
 
     if (postcssConfigIsPath) {
-      try {
-        const cwd = path.dirname(postcssConfig);
-        const { plugins } = await loadPostcssConfig({}, cwd);
-        return (plugins || []).filter(Boolean);
-      } catch {
-        return [];
-      }
+        try {
+            const cwd = path.dirname(postcssConfig);
+            const { plugins } = await loadPostcssConfig({}, cwd);
+            return (plugins || []).filter(Boolean);
+        } catch {
+            return [];
+        }
     }
-  
+
     return (postcssConfig?.plugins || []).filter(Boolean);
-  }
+}
 
 // Compute value for data-lazy-css-id attribute on injected <style> tags.
 // Dev: normalized full path (easy to debug). Prod: basename + short hash from CSS (avoid collisions).

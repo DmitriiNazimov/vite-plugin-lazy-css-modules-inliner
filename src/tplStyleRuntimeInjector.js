@@ -31,12 +31,24 @@ function createCssModuleProxy(tokens, id, css) {
         ensureLazyCssInjected(id, css);
         isInjected = true;
     }
-    
+
     // Proxy to inject CSS once on first access to tokens.
     return new Proxy(tokens, {
-        get: function (target, prop, receiver) { init(); return Reflect.get(target, prop, receiver); },
-        has: function (target, prop) { init(); return Reflect.has(target, prop); },
-        ownKeys: function (target) { init(); return Reflect.ownKeys(target); },
-        getOwnPropertyDescriptor: function (target, prop) { init(); return Object.getOwnPropertyDescriptor(target, prop); }
+        get: function (target, prop, receiver) {
+            init();
+            return Reflect.get(target, prop, receiver);
+        },
+        has: function (target, prop) {
+            init();
+            return Reflect.has(target, prop);
+        },
+        ownKeys: function (target) {
+            init();
+            return Reflect.ownKeys(target);
+        },
+        getOwnPropertyDescriptor: function (target, prop) {
+            init();
+            return Object.getOwnPropertyDescriptor(target, prop);
+        },
     });
 }
