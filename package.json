@@ -1,73 +1,76 @@
 {
-  "name": "vite-plugin-lazy-css-modules-inliner",
-  "version": "0.0.2",
-  "description": "Vite plugin to inline CSS Modules for dynamically imported code.",
-  "license": "MIT",
-  "author": "DmitriiNazimov",
-  "homepage": "https://github.com/DmitriiNazimov/vite-plugin-lazy-css-modules-inliner#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/DmitriiNazimov/vite-plugin-lazy-css-modules-inliner.git"
-  },
-  "bugs": {
-    "url": "https://github.com/DmitriiNazimov/vite-plugin-lazy-css-modules-inliner/issues"
-  },
-  "type": "module",
-  "sideEffects": false,
-  "engines": {
-    "node": ">=18"
-  },
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    }
-  },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ],
-  "scripts": {
-    "clean": "rm -rf dist",
-    "build": "tsup src/index.ts --format esm,cjs --dts --sourcemap --clean --target node18 --shims && cp ./src/tplStyleRuntimeInjector.js ./dist/",
-    "lint": "eslint . --ext .ts",
-    "format": "prettier -w .",
-    "prepublishOnly": "npm run build && npm run lint"
-  },
-  "peerDependencies": {
-    "vite": ">=4"
-  },
-  "dependencies": {
-    "cssnano": "6.1.2",
-    "estree-walker": "3.0.3",
-    "magic-string": "0.30.17",
-    "postcss": "8.5.6",
-    "postcss-modules": "6.0.1"
-  },
-  "devDependencies": {
-    "@types/node": "22.17.2",
-    "@typescript-eslint/eslint-plugin": "8.39.1",
-    "@typescript-eslint/parser": "8.39.1",
-    "eslint": "9.33.0",
-    "eslint-config-prettier": "10.1.8",
-    "prettier": "3.6.2",
-    "tsup": "8.5.0",
-    "typescript": "5.9.2"
-  },
-  "publishConfig": {
-    "access": "public"
-  },
-  "keywords": [
-    "vite",
-    "plugin",
-    "css-modules",
-    "lazy",
-    "dynamic import",
-    "inline css"
-  ]
+    "name": "vite-plugin-lazy-css-modules-inliner",
+    "version": "0.0.2",
+    "description": "Vite plugin to inline CSS Modules for dynamically imported code.",
+    "license": "MIT",
+    "author": "DmitriiNazimov",
+    "homepage": "https://github.com/DmitriiNazimov/vite-plugin-lazy-css-modules-inliner#readme",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/DmitriiNazimov/vite-plugin-lazy-css-modules-inliner.git"
+    },
+    "bugs": {
+        "url": "https://github.com/DmitriiNazimov/vite-plugin-lazy-css-modules-inliner/issues"
+    },
+    "type": "module",
+    "sideEffects": false,
+    "engines": {
+        "node": ">=18"
+    },
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js",
+            "require": "./dist/index.cjs"
+        }
+    },
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE"
+    ],
+    "scripts": {
+        "clean": "rm -rf dist",
+        "build": "tsup src/index.ts --format esm,cjs --dts --sourcemap --clean --target node18 --platform node --external postcss-load-config && cp ./src/tplStyleRuntimeInjector.js ./dist/",
+        "build:watch": "tsup src/index.ts --format esm,cjs --dts --sourcemap --target node18 --platform node --external postcss-load-config --watch --onSuccess \"cp ./src/tplStyleRuntimeInjector.js ./dist/\"",
+        "lint": "eslint . --ext .ts",
+        "format": "prettier -w .",
+        "check": "npm run build && npm run lint",
+        "connect": "npm run build:watch && npm link"
+    },
+    "peerDependencies": {
+        "vite": ">=4"
+    },
+    "dependencies": {
+        "cssnano": "6.1.2",
+        "estree-walker": "3.0.3",
+        "magic-string": "0.30.17",
+        "postcss": "8.5.6",
+        "postcss-modules": "6.0.1",
+        "postcss-load-config": "5.1.0"
+    },
+    "devDependencies": {
+        "@types/node": "22.17.2",
+        "@typescript-eslint/eslint-plugin": "8.39.1",
+        "@typescript-eslint/parser": "8.39.1",
+        "eslint": "9.33.0",
+        "eslint-config-prettier": "10.1.8",
+        "prettier": "3.6.2",
+        "tsup": "8.5.0",
+        "typescript": "5.9.2"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "keywords": [
+        "vite",
+        "plugin",
+        "css-modules",
+        "lazy",
+        "dynamic import",
+        "inline css"
+    ]
 }

@@ -1,16 +1,18 @@
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type MagicString from 'magic-string';
-import type { StripPreloadDepsMode, ProcessCssResult } from './types';
-import { FILTER_CSS_FN } from './constants';
+import type { StripPreloadDepsMode, ProcessCssResult, ProcessCssParams } from './types';
+import { CSS_MODULES_PLUGIN_ID, CSS_NANO_PLUGIN_ID, FILTER_CSS_FN } from './constants';
 import postcss, { type AcceptedPlugin } from 'postcss';
 import postcssModules from 'postcss-modules';
 import cssnano from 'cssnano';
 import { readFile } from 'fs/promises';
 import { VIRTUAL_PREFIX } from './constants';
-import type { CSSModulesOptions } from 'vite';
+import type { ResolvedConfig } from 'vite';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { RenderedChunk } from 'rollup';
+import loadPostcssConfig from 'postcss-load-config';
 
 // Cache for runtime injector script to avoid reading file multiple times
 let runtimeStylesInjectorCache: string | null = null;
@@ -108,33 +110,42 @@ export function markDynamicModule(
     return normId;
 }
 
-// Read CSS, and if it is a CSS Module, compute hashed tokens using Vite's css.modules settings.
-// Minify CSS in production via cssnano.
-export async function processCss(
-    originalId: string,
-    modulesConfig: CSSModulesOptions | undefined | false,
-    isDev: boolean
-): Promise<ProcessCssResult> {
-    const css = await readFile(originalId, 'utf-8');
+// Read and process CSS file - apply postcss plugins, minify in production, collect tokens.
+export async function processCss({
+    originalId,
+    cssModulesConfig,
+    isDev,
+    postcssPlugins = []
+    }: ProcessCssParams): Promise<ProcessCssResult> {
+    const cssSource = await readFile(originalId, 'utf-8');
+    const tokens: Record<string, string> = {};
+    const plugins: AcceptedPlugin[] = postcssPlugins.filter(Boolean);
+    const pluginIds = new Set(plugins.map((plugin) => getPostcssPluginId(plugin)));
 
-    if (!isCssModuleFile(originalId)) {
-        return { css, tokens: {} };
+    // Add css-modules plugin if needed
+    const hasPostcssModulesInConfig = pluginIds.has(CSS_MODULES_PLUGIN_ID);
+    const isModule = isCssModuleFile(originalId) && Boolean(cssModulesConfig);
+    
+    if (isModule && !hasPostcssModulesInConfig && cssModulesConfig) {
+        plugins.push(
+            postcssModules({
+                generateScopedName: cssModulesConfig.generateScopedName,
+                localsConvention: cssModulesConfig.localsConvention || 'camelCaseOnly',
+                getJSON: (_file: string, json: Record<string, string>) => Object.assign(tokens, json),
+            })
+        );
     }
 
-    const exportTokens: Record<string, string> = {};
-    const plugins = [
-        modulesConfig
-            ? postcssModules({
-                  generateScopedName: modulesConfig?.generateScopedName,
-                  localsConvention: modulesConfig?.localsConvention || 'camelCaseOnly',
-                  getJSON: (_f: string, json: Record<string, string>) => Object.assign(exportTokens, json),
-              })
-            : null,
-        isDev ? null : cssnano({ preset: 'default' }),
-    ].filter(Boolean) as AcceptedPlugin[];
-    const result = await postcss(plugins).process(css, { from: originalId });
+    // Add cssnano if needed. For minification and optimization.
+    const hasUserCssnano = pluginIds.has(CSS_NANO_PLUGIN_ID);
 
-    return { css: result.css, tokens: exportTokens };
+    if (!isDev && !hasUserCssnano) {
+        plugins.push(cssnano({ preset: 'default' }));
+    }
+
+    const result = await postcss(deduplicatePlugins(plugins)).process(cssSource, { from: originalId });
+
+    return { css: result.css, tokens: tokens };
 }
 
 // Get the runtime styles injector script from the file system and cache it to avoid reading file multiple times.
@@ -143,7 +154,8 @@ export function getRuntimeStylesInjectorScript(): string {
         return runtimeStylesInjectorCache;
     }
 
-    runtimeStylesInjectorCache = readFileSync(path.resolve(__dirname, './tplStyleRuntimeInjector.js'), 'utf-8');
+    const thisDir = path.dirname(fileURLToPath(import.meta.url));
+    runtimeStylesInjectorCache = readFileSync(path.resolve(thisDir, './tplStyleRuntimeInjector.js'), 'utf-8');
 
     return runtimeStylesInjectorCache;
 }
@@ -176,6 +188,28 @@ export function hasAllowedModule(chunk: RenderedChunk, includedPathes: string[],
     return Object.keys(modules).some((id) => isAllowPath(id, includedPathes, excludedPathes));
 }
 
+export async function resolvePostcssPlugins(viteConfig: ResolvedConfig): Promise<AcceptedPlugin[]> {
+    const postcssConfig = viteConfig?.css?.postcss;
+    
+    if (!postcssConfig) { 
+        return [];
+    }
+
+    const postcssConfigIsPath = typeof postcssConfig === 'string';
+
+    if (postcssConfigIsPath) {
+      try {
+        const cwd = path.dirname(postcssConfig);
+        const { plugins } = await loadPostcssConfig({}, cwd);
+        return (plugins || []).filter(Boolean);
+      } catch {
+        return [];
+      }
+    }
+  
+    return (postcssConfig?.plugins || []).filter(Boolean);
+  }
+
 // Compute value for data-lazy-css-id attribute on injected <style> tags.
 // Dev: normalized full path (easy to debug). Prod: basename + short hash from CSS (avoid collisions).
 function getLazyCssId(originalId: string, isDev: boolean, css?: string): string {
@@ -192,5 +226,25 @@ function getLazyCssId(originalId: string, isDev: boolean, css?: string): string 
 
     return base;
 }
- 
 
+// Get plugin id to deduplicate PostCSS plugins
+function getPostcssPluginId(plugin: AcceptedPlugin): string | undefined {
+    if (plugin && 'postcssPlugin' in plugin) {
+        return plugin.postcssPlugin;
+    }
+
+    return undefined;
+}
+
+// Deduplicate plugins list by id while preserving first occurrence (user's order)
+function deduplicatePlugins(plugins: AcceptedPlugin[]): AcceptedPlugin[] {
+    const seen = new Set<string>();
+
+    return plugins.filter((p) => {
+        const id = getPostcssPluginId(p) || String(p);
+        if (seen.has(id)) return false;
+        seen.add(id);
+
+        return true;
+    });
+}

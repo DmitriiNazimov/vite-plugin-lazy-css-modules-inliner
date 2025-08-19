@@ -1,6 +1,8 @@
 import MagicString from 'magic-string';
 import { walk } from 'estree-walker';
-import type { CSSModulesOptions, Plugin } from 'vite';
+import type { CSSModulesOptions, Plugin, ResolvedConfig } from 'vite';
+import type { AcceptedPlugin } from 'postcss';
+
 import { VIRTUAL_PREFIX } from './constants';
 import type { PluginOptions } from './types';
 import {
@@ -13,6 +15,7 @@ import {
     generateVirtualModuleCode,
     getOriginalIdFromVirtual,
     hasAllowedModule,
+    resolvePostcssPlugins,
 } from './functions';
 import type { ModuleInfo, ProgramNode } from 'rollup';
 
@@ -29,12 +32,15 @@ export function viteLazyCssModulesInliner({
 
     let isSSRBuild = false;
     let cssModulesConfig: CSSModulesOptions | undefined | false = undefined;
+    let viteConfig: ResolvedConfig;
+    let postcssPlugins: AcceptedPlugin[] = [];
 
     return {
         name: 'vite-lazy-dynamic-css-inliner',
         enforce: 'pre',
 
         configResolved(config) {
+            viteConfig = config;
             isSSRBuild = Boolean(config.build?.ssr);
             cssModulesConfig = config.css?.modules;
 
@@ -47,14 +53,29 @@ export function viteLazyCssModulesInliner({
                 throw new Error(`[lazy-css-modules-inliner: configResolved] isDev is required. 
           Please provide it in the config like this: const isDev = process.env.NODE_ENV === 'development'; viteLazyCssInliner({ isDev })`);
             }
+
+            if (!cssModulesConfig) {
+                throw new Error(`[lazy-css-modules-inliner: configResolved] cssModulesConfig is required. 
+          Please provide it in the config. Example: 
+            vite: {
+                css: {
+                    modules: {
+                        localsConvention: 'camelCaseOnly',
+                        generateScopedName: isDev ? '[name]_[local]_[hash:base64:3]' : '[local]_[hash:base64:5]',
+                    },
+                }
+            }`);
+            }
         },
 
-        buildStart() {
+        async buildStart() {
             // Reset state to avoid memory leaks in dev mode
             if (isDev) {
                 dynamicRoots.clear();
                 lazyGraph.clear();
             }
+
+            postcssPlugins = await resolvePostcssPlugins(viteConfig);
         },
 
         async resolveDynamicImport(specifier, importer, resolveOpts) {
@@ -147,15 +168,16 @@ export function viteLazyCssModulesInliner({
             }
 
             let moduleInfo: ModuleInfo | null = null;
+            let dynamicImporters: string[] | null = null;
 
             try {
                 moduleInfo = this.getModuleInfo(id);
+                // A module is a dynamic root if at least one other module imports it via import().
+                dynamicImporters = Array.from(moduleInfo?.dynamicImporters ?? []);
             } catch {
                 return null;
             }
 
-            // A module is a dynamic root if at least one other module imports it via import().
-            const dynamicImporters = (moduleInfo?.dynamicImporters ?? []) as string[];
             // Some module import current module via dynamic import.
             const hasDynamicImporters = Array.isArray(dynamicImporters) && dynamicImporters.length > 0;
 
@@ -191,7 +213,7 @@ export function viteLazyCssModulesInliner({
             }
 
             try {
-                const { css, tokens } = await processCss(originalId, cssModulesConfig, isDev!);
+                const { css, tokens } = await processCss({ originalId, cssModulesConfig, isDev: Boolean(isDev), postcssPlugins });
                 return await generateVirtualModuleCode(css, tokens, originalId, isDev!);
             } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err);
@@ -239,5 +261,3 @@ export function viteLazyCssModulesInliner({
         },
     };
 }
- 
-

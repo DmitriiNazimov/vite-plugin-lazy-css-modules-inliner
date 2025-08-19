@@ -1,3 +1,6 @@
+import { AcceptedPlugin } from 'postcss';
+import { CSSModulesOptions } from 'vite';
+
 export type StripPreloadDepsMode = 'all' | 'css';
 
 export interface PluginOptions {
@@ -11,5 +14,10 @@ export interface ProcessCssResult {
     css: string;
     tokens: Record<string, string>;
 }
- 
 
+export interface ProcessCssParams {
+    originalId: string;
+    cssModulesConfig: CSSModulesOptions | undefined | false;
+    isDev: boolean;
+    postcssPlugins: AcceptedPlugin[];
+}

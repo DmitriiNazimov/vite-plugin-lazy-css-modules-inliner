@@ -15,5 +15,3 @@ function injectLazyCss(id, css) {
         styleTag.textContent = css;
     }
 }
- 
-
