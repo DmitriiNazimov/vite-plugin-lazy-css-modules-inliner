@@ -3,7 +3,7 @@ import { walk } from 'estree-walker';
 import type { CSSModulesOptions, Plugin, ResolvedConfig } from 'vite';
 import type { AcceptedPlugin } from 'postcss';
 
-import { VIRTUAL_PREFIX } from './constants';
+import { VIRTUAL_PREFIX, RUNTIME_MODULE_ID } from './constants';
 import type { PluginOptions } from './types';
 import {
     normalizeId,
@@ -14,10 +14,12 @@ import {
     processCss,
     generateVirtualModuleCode,
     getOriginalIdFromVirtual,
+    getVirtualCssModuleId,
     hasAllowedModule,
     resolvePostcssPlugins,
+    getRuntimeStylesInjectorScript,
 } from './functions';
-import type { ModuleInfo, ProgramNode } from 'rollup';
+import type { ProgramNode } from 'rollup';
 
 export function viteLazyCssModulesInliner({
     stripPreloadDepsMode = 'css',
@@ -115,6 +117,11 @@ export function viteLazyCssModulesInliner({
         //  - If the child is NOT CSS, mark it as part of the lazy graph so the laziness propagates further
         //    down the dependency tree. This keeps the entire subtree isolated from page CSS collection.
         async resolveId(source, importer, resolveOpts) {
+            // Handle our shared runtime virtual module regardless of importer
+            if (source === RUNTIME_MODULE_ID) {
+                return RUNTIME_MODULE_ID;
+            }
+
             // Only handle string imports with a concrete importer (skip entries)
             if (!importer || typeof source !== 'string') {
                 return null;
@@ -150,14 +157,13 @@ export function viteLazyCssModulesInliner({
             const childModuleId = markDynamicModule(resolvedModule.id, dynamicRoots, lazyGraph, false);
 
             if (isCssFile(childModuleId)) {
-                return VIRTUAL_PREFIX + childModuleId + '.js';
+                return getVirtualCssModuleId(childModuleId);
             }
 
             return childModuleId;
         },
 
-        // Detect dynamic roots by checking getModuleInfo().dynamicImporters.
-        // Note: moduleInfo.dynamicImporters is an array of module ids that import current id via import().
+        // Detect dynamic roots by checking getModuleInfo().dynamicImporters and dynamicallyImportedIds
         transform(_code, id) {
             if (!isAllowPath(id, includedPathes, excludedPathes)) {
                 return null;
@@ -167,23 +173,21 @@ export function viteLazyCssModulesInliner({
                 return null;
             }
 
-            let moduleInfo: ModuleInfo | null = null;
-            let dynamicImporters: string[] | null = null;
-
             try {
-                moduleInfo = this.getModuleInfo(id);
-                // A module is a dynamic root if at least one other module imports it via import().
-                dynamicImporters = Array.from(moduleInfo?.dynamicImporters ?? []);
+                const info = this.getModuleInfo(id);
+                const importers = Array.from(info?.dynamicImporters ?? []);
+                if (importers.length > 0) {
+                    markDynamicModule(id, dynamicRoots, lazyGraph, true);
+                }
+                const dynChildren = Array.from(info?.dynamicallyImportedIds ?? []);
+                if (dynChildren.length > 0) {
+                    for (const child of dynChildren) {
+                        if (!isAllowPath(child, includedPathes, excludedPathes)) continue;
+                        markDynamicModule(child, dynamicRoots, lazyGraph, true);
+                    }
+                }
             } catch {
                 return null;
-            }
-
-            // Some module import current module via dynamic import.
-            const hasDynamicImporters = Array.isArray(dynamicImporters) && dynamicImporters.length > 0;
-
-            if (hasDynamicImporters) {
-                // Client-side detection of dynamic root
-                markDynamicModule(id, dynamicRoots, lazyGraph, true);
             }
 
             return null;
@@ -199,6 +203,12 @@ export function viteLazyCssModulesInliner({
 
             if (!isVirtualModule) {
                 return null;
+            }
+
+            if (id === RUNTIME_MODULE_ID) {
+                // Provide runtime injector as a shared virtual module to avoid inlining duplicates
+                const runtimeStylesInjectorScript = getRuntimeStylesInjectorScript();
+                return `${runtimeStylesInjectorScript} export { injectLazyCss, ensureLazyCssInjected, createCssModuleProxy };`;
             }
 
             if (isSSRBuild) {

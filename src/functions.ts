@@ -2,7 +2,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type MagicString from 'magic-string';
 import type { StripPreloadDepsMode, ProcessCssResult, ProcessCssParams } from './types';
-import { CSS_MODULES_PLUGIN_ID, CSS_NANO_PLUGIN_ID, FILTER_CSS_FN } from './constants';
+import { CSS_MODULES_PLUGIN_ID, CSS_NANO_PLUGIN_ID, FILTER_CSS_FN, RUNTIME_MODULE_ID } from './constants';
 import postcss, { type AcceptedPlugin } from 'postcss';
 import postcssModules from 'postcss-modules';
 import cssnano from 'cssnano';
@@ -33,9 +33,16 @@ export function getOriginalIdFromVirtual(virtualId: string): string {
         return virtualId;
     }
 
-    return virtualId.endsWith('.js')
-        ? virtualId.slice(VIRTUAL_PREFIX.length, -3)
-        : virtualId.slice(VIRTUAL_PREFIX.length);
+    return virtualId
+        .slice(VIRTUAL_PREFIX.length)
+        .replace(/\.js$/, '');
+}
+
+// Build a unique virtual id for CSS file, optionally namespaced by importer id to
+// avoid hoisting into shared chunks and to keep injection bound to the importer chunk.
+export function getVirtualCssModuleId(originalCssId: string): string {
+    const baseId = normalizeId(originalCssId);
+    return `${VIRTUAL_PREFIX}${baseId}.js`;
 }
 
 // Check if an id belongs to the includedPathes directory passedfrom config. And not in excludedPathes.
@@ -148,7 +155,7 @@ export async function processCss({
     return { css: result.css, tokens: tokens };
 }
 
-// Get the runtime styles injector script from the file system and cache it to avoid reading file multiple times.
+// Get the runtime styles injector script from the file system. And cache it to avoid reading file multiple times.
 export function getRuntimeStylesInjectorScript(): string {
     if (runtimeStylesInjectorCache) {
         return runtimeStylesInjectorCache;
@@ -169,17 +176,24 @@ export async function generateVirtualModuleCode(
     originalId: string,
     isDev: boolean
 ): Promise<string> {
-    const runtimeStylesInjectorScript = getRuntimeStylesInjectorScript();
     const lazyCssId = getLazyCssId(originalId, isDev, css);
-    const preventSsrRuntime = `if (typeof document === 'undefined') return;`;
+    const isModule = isCssModuleFile(originalId);
+    const header = `import { ensureLazyCssInjected, createCssModuleProxy } from ${JSON.stringify(RUNTIME_MODULE_ID)};`;
 
+    if (!isModule) {
+        // Plain CSS side-effect import: inject immediately on evaluation
+        return `
+    ${header}
+    ensureLazyCssInjected(${JSON.stringify(lazyCssId)}, ${JSON.stringify(css)});
+    export default {};
+  `;
+    }
+
+    // CSS Modules: inject lazily on first token access using a Proxy
     return `
-    (function(){
-      ${preventSsrRuntime}
-      ${runtimeStylesInjectorScript}
-      injectLazyCss(${JSON.stringify(lazyCssId)}, ${JSON.stringify(css)});
-    })();
-    export default ${JSON.stringify(tokens)};
+    ${header}
+    const __tokens = ${JSON.stringify(tokens)};
+    export default createCssModuleProxy(__tokens, ${JSON.stringify(lazyCssId)}, ${JSON.stringify(css)});
   `;
 }
 

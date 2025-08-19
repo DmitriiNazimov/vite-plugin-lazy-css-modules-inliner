@@ -2,7 +2,7 @@
 
 Note: A Russian version of this README is available below.
 
-A Vite plugin that enables true on-demand CSS for dynamically imported code by virtualizing CSS Modules. It prevents lazy components' styles from being bundled into the page CSS and injects them only when the corresponding JS is loaded.
+A Vite plugin that enables true on-demand CSS for dynamically imported code by virtualizing CSS Modules. It prevents lazy components' styles from being bundled into the page CSS and injects them only when the corresponding JS is actually used.
 
 ## Installation
 
@@ -26,18 +26,26 @@ Limitations: native SFC styles (`<style>` inside `.svelte`/`.vue`) are out of sc
 - Preserve CSS Modules hashing consistency between SSR and client
 - Avoid preloading page CSS/JS from `__vitePreload` in dynamic chunks
 
-## How it works (build pipeline)
+## How it works (build pipeline and runtime)
 
-1. Detect dynamic roots
-    - SSR: `resolveDynamicImport` marks `import()` targets as roots
-    - Client: `transform` reads `getModuleInfo(id).dynamicImporters` and marks such modules as roots
-2. Propagate laziness
-    - `resolveId` marks children of lazy importers as part of the lazy graph and reroutes CSS imports to virtual modules
-3. Virtual CSS modules
-    - SSR `load`: returns an empty module — styles are not collected into page CSS
-    - Client `load`: reads CSS, applies `postcss-modules` (tokens), minifies with `cssnano` in prod, injects `<style data-lazy-css-id="...">`
-4. Strip CSS deps from `__vitePreload`
-    - `renderChunk` wraps deps array so `.css` entries are filtered out
+1) Detect dynamic roots
+   - SSR: `resolveDynamicImport` marks `import()` targets as roots
+   - Client: `transform` uses `getModuleInfo(id).dynamicImporters` and also promotes `dynamicallyImportedIds` as roots
+2) Propagate laziness
+   - `resolveId` treats children of lazy importers as part of the lazy graph
+   - CSS imports inside the lazy graph are rerouted to virtual JS modules
+3) Virtual CSS modules
+   - SSR `load`: returns an empty module — styles are not collected into the page CSS bundle
+   - Client `load`:
+     - reads CSS, applies `postcss-modules` if needed, minifies with `cssnano` in prod
+     - generates a virtual JS module that imports a shared runtime (`lazy-css-inliner:runtime`)
+       and either:
+       - plain CSS: calls `ensureLazyCssInjected(id, css)` immediately
+       - CSS Modules: exports a Proxy that injects CSS only on the first token access
+4) Strip CSS deps from `__vitePreload`
+   - `renderChunk` filters out `.css` entries when `stripPreloadDepsMode: 'css'` (or all deps when `'all'`)
+
+Note about bundling: virtual CSS code can still end up inside a shared parent chunk depending on Rollup splitting. This does not inject styles early — injection happens only when the virtual module executes (or when CSS‑Module tokens are accessed). If you want stricter chunk boundaries, add simple `manualChunks` rules in your Vite config.
 
 ## Options
 
@@ -56,8 +64,9 @@ Defaults are applied at `configResolved` when not provided.
 
 ## Diagnostics
 
-- Mixed static + dynamic imports of the same module can duplicate CSS by design. Prefer picking one strategy or accept the trade‑off (warning in build output).
+- Mixed static + dynamic imports of the same module can duplicate CSS by design. Prefer picking one strategy or accept the trade‑off.
 - Above‑the‑fold dynamic modules will inject CSS very early — consider static import instead.
+ - If virtual CSS appears in a shared parent chunk, consider `build.rollupOptions.output.manualChunks` to separate domains (dialogs, overlays, etc.).
 
 ## Examples
 
@@ -73,7 +82,7 @@ export default defineConfig({
         viteLazyCssInliner({
             includedPathes: [path.join(process.cwd(), 'src')],
             excludedPathes: ['node_modules'],
-            stripPreloadDepsMode: 'css',
+            stripPreloadDepsMode: 'css', // or 'all' to disable all __vitePreload deps
             isDev: process.env.NODE_ENV === 'development',
         }),
     ],
@@ -108,7 +117,7 @@ export default defineConfig({
 
 # vite-plugin-lazy-css-modules-inliner (Русская версия)
 
-Плагин Vite, виртуализирующий CSS Modules для динамически импортируемого кода. Стили ленивых модулей не попадают в общий CSS страницы и инжектятся только при загрузке соответствующего JS.
+Плагин Vite, виртуализирующий CSS Modules для динамически импортируемого кода. Стили ленивых модулей не попадают в общий CSS страницы и инжектятся только при фактическом использовании соответствующего кода.
 
 ## Установка
 
@@ -127,16 +136,22 @@ export default defineConfig({
 ## Цели
 
 - Держать страничный CSS чистым от стилей ленивых модулей
-- Грузить JS+CSS одним чанком по требованию
+- Грузить JS+CSS по требованию
 - Сохранять консистентность хэшей CSS Modules между SSR и клиентом
 - Удалять `.css` из `__vitePreload` в динамических чанках
 
-## Как работает
+## Как работает (пайплайн и рантайм)
 
-1. Определение корней динамики: SSR — `resolveDynamicImport`, клиент — `transform`/`dynamicImporters`
-2. Распространение «ленивости»: `resolveId` помечает потомков и перенаправляет CSS на виртуальные модули
-3. Виртуальные CSS‑модули: SSR — пустой экспорт, клиент — `<style data-lazy-css-id="...">` + tokens
-4. Чистка `__vitePreload`: удаляем `.css` из deps
+1) Определение корней динамики: SSR — `resolveDynamicImport`, клиент — `transform`/`dynamicImporters` + продвижение `dynamicallyImportedIds`
+2) Распространение «ленивости»: `resolveId` помечает потомков; CSS в «ленивом» подграфе превращаются в виртуальные JS‑модули
+3) Виртуальные CSS‑модули:
+   - SSR — пустой модуль (ничего не собирается в общий CSS)
+   - Клиент — импорт общего рантайма (`lazy-css-inliner:runtime`) и:
+     - для обычного CSS — немедленная инъекция через `ensureLazyCssInjected`
+     - для CSS Modules — экспорт Proxy, инъекция при первом доступе к токенам
+4) Чистка `__vitePreload`: фильтруем `.css` из deps (или все deps при режиме `'all'`)
+
+Замечание про чанки: виртуальный CSS‑код может оказаться в «родительском» чанке из‑за стратегии сплиттинга Rollup. Это не приводит к ранней инъекции — вставка стилей происходит только при выполнении виртуального модуля (или при первом обращении к токенам). Для более строгого разделения используйте `manualChunks`.
 
 ## Опции
 
@@ -153,8 +168,9 @@ export interface PluginOptions {
 
 ## Диагностика
 
-- Смешение статического и динамического импорта одного модуля может привести к дублям CSS — это ожидаемо. Лучше выбрать один подход.
+- Смешение статического и динамического импорта одного и того же модуля может привести к дублям CSS — это ожидаемо. Лучше выбрать один подход.
 - Для блоков «над сгибом» лучше статический импорт — динамика инжектит CSS позднее.
+ - Если виртуальный CSS попадает в общий чанк — настройте `manualChunks` (например, разнести диалоги, оверлеи по отдельным чанкам).
 
 ## Примеры
 
