@@ -17,14 +17,12 @@
     "engines": {
         "node": ">=18"
     },
-    "main": "./dist/index.cjs",
     "module": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
-            "import": "./dist/index.js",
-            "require": "./dist/index.cjs"
+            "import": "./dist/index.js"
         }
     },
     "files": [
@@ -34,8 +32,8 @@
     ],
     "scripts": {
         "clean": "rm -rf dist",
-        "build": "tsup src/index.ts --format esm,cjs --dts --sourcemap --clean --target node18 --platform node --external postcss-load-config && cp ./src/tplStyleRuntimeInjector.js ./dist/",
-        "build:watch": "tsup src/index.ts --format esm,cjs --dts --sourcemap --target node18 --platform node --external postcss-load-config --watch --onSuccess \"cp ./src/tplStyleRuntimeInjector.js ./dist/\"",
+        "build": "tsup src/index.ts --format esm --dts --sourcemap --clean --target node18 --platform node --external postcss-load-config && cp ./src/tplStyleRuntimeInjector.js ./dist/",
+        "build:watch": "tsup src/index.ts --format esm --dts --sourcemap --target node18 --platform node --external postcss-load-config --watch --onSuccess \"cp ./src/tplStyleRuntimeInjector.js ./dist/\"",
         "lint": "eslint . --ext .ts",
         "format": "prettier -w .",
         "check": "npm run build && npm run lint",
