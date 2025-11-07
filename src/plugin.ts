@@ -3,7 +3,7 @@ import { walk } from 'estree-walker';
 import type { CSSModulesOptions, Plugin, ResolvedConfig } from 'vite';
 import type { AcceptedPlugin } from 'postcss';
 
-import { VIRTUAL_PREFIX, RUNTIME_MODULE_ID } from './constants';
+import { VIRTUAL_PREFIX, RUNTIME_MODULE_ID, CSS_REGEX, ID_REGEX } from './constants';
 import type { PluginOptions } from './types';
 import {
     normalizeId,
@@ -18,6 +18,11 @@ import {
     hasAllowedModule,
     resolvePostcssPlugins,
     getRuntimeStylesInjectorScript,
+    makeReplaceCssLtr,
+    makeReplaceCssRtl,
+    convertLtrIdToRtl,
+    getRtlFileName,
+    createRtlChunk,
 } from './functions';
 import type { ProgramNode } from 'rollup';
 
@@ -26,11 +31,13 @@ export function viteLazyCssModulesInliner({
     isDev,
     includedPathes = [],
     excludedPathes = ['node_modules'],
+    runtimeIsRtlCondition,
 }: PluginOptions): Plugin {
     // Dynamic import roots (modules that are loaded via import(), also known as dynamic imports or dynamic entry points)
     const dynamicRoots = new Set<string>();
     // Entire subgraph of modules belonging to any of the dynamic roots
     const lazyGraph = new Set<string>();
+    const hasRtl = Boolean(runtimeIsRtlCondition);
 
     let isSSRBuild = false;
     let cssModulesConfig: CSSModulesOptions | undefined | false = undefined;
@@ -227,7 +234,6 @@ export function viteLazyCssModulesInliner({
                 const { css, tokens } = await processCss({
                     originalId,
                     cssModulesConfig,
-                    isDev: Boolean(isDev),
                     postcssPlugins,
                 });
                 return await generateVirtualModuleCode(css, tokens, originalId, isDev!);
@@ -263,7 +269,8 @@ export function viteLazyCssModulesInliner({
             const codeMagicString = new MagicString(code);
 
             walk(ast, {
-                enter: (node) => stripPreloadDeps(node, code, stripPreloadDepsMode, codeMagicString),
+                enter: (node) =>
+                    stripPreloadDeps(node, code, stripPreloadDepsMode, codeMagicString, runtimeIsRtlCondition),
             });
 
             if (codeMagicString.hasChanged()) {
@@ -274,6 +281,40 @@ export function viteLazyCssModulesInliner({
             }
 
             return null;
+        },
+
+        // Generate RTL chunks if needed and minify CSS
+        generateBundle(_options, bundle) {
+            if (isSSRBuild) {
+                return;
+            }
+
+            const minifyCss = makeReplaceCssLtr(isDev!);
+            const convertCssToRtlAndTryMinify = makeReplaceCssRtl(isDev!);
+
+            Object.entries(bundle).forEach(([fileName, chunk]) => {
+                if (chunk.type !== 'chunk') {
+                    return;
+                }
+
+                const ltrCode = chunk.code;
+
+                if (!isDev) {
+                    chunk.code = ltrCode.replace(CSS_REGEX, minifyCss);
+                }
+
+                if (!hasRtl) {
+                    return;
+                }
+
+                const rtlCode = ltrCode
+                    .replace(CSS_REGEX, convertCssToRtlAndTryMinify)
+                    .replace(ID_REGEX, convertLtrIdToRtl);
+
+                const rtlFileName = getRtlFileName(fileName);
+
+                bundle[rtlFileName] = createRtlChunk(chunk, rtlFileName, rtlCode);
+            });
         },
     };
 }

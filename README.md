@@ -57,10 +57,20 @@ export interface PluginOptions {
     isDev?: boolean; // dev switch (sourcemaps/minify)
     includedPathes?: string[]; // roots to include; default: [path.join(root,'src')]
     excludedPathes?: string[]; // paths to exclude; default: ['node_modules']
+    runtimeIsRtlCondition?: string; // optional JS condition evaluated at runtime to enable RTL (e.g. 'window.isRtl')
 }
 ```
 
 Defaults are applied at `configResolved` when not provided.
+
+## RTL support
+
+If `runtimeIsRtlCondition` is provided, the plugin enables RTL mode:
+
+- Duplicates client chunks under `rtl/` and keeps all imports relative so nested dynamic imports resolve within `rtl/`.
+- Converts inlined CSS to RTL during duplication using `rtlcss` lib.
+- Appends `.rtl` to lazy CSS ids to avoid collisions.
+- Filters `__vitePreload` deps at runtime so only the appropriate (LTR/RTL) JS and CSS are requested.
 
 ## Diagnostics
 
@@ -84,32 +94,9 @@ export default defineConfig({
             excludedPathes: ['node_modules'],
             stripPreloadDepsMode: 'css', // or 'all' to disable all __vitePreload deps
             isDev: process.env.NODE_ENV === 'development',
+            runtimeIsRtlCondition: 'window.isRtl',
         }),
     ],
-});
-```
-
-- astro.config.mjs
-
-```js
-import { defineConfig } from 'astro/config';
-import svelte from '@astrojs/svelte';
-import { viteLazyCssInliner } from 'vite-plugin-lazy-css-modules-inliner';
-import path from 'node:path';
-
-export default defineConfig({
-    integrations: [svelte({ emitCss: false })],
-    build: { inlineStylesheets: 'never' },
-    vite: {
-        plugins: [
-            viteLazyCssInliner({
-                includedPathes: [path.join(process.cwd(), 'src')],
-                excludedPathes: ['node_modules'],
-                stripPreloadDepsMode: 'css',
-                isDev: process.env.NODE_ENV === 'development',
-            }),
-        ],
-    },
 });
 ```
 
@@ -145,25 +132,25 @@ export default defineConfig({
 Ниже — краткая «дорожная карта» того, что делает плагин на разных стадиях:
 
 1. Находим «ленивые корни» (dynamic roots)
-   - На SSR: хук `resolveDynamicImport` перехватывает `import()` и помечает цель импорта как корень ленивого подграфа.
-   - На клиентской сборке: хук `transform` анализирует `getModuleInfo(id)` и:
-     - если у модуля есть `dynamicImporters` — он является целью чьего‑то `import()` → тоже корень;
-     - дополнительно продвигает `dynamicallyImportedIds` в корни (дети по динамическим рёбрам).
+    - На SSR: хук `resolveDynamicImport` перехватывает `import()` и помечает цель импорта как корень ленивого подграфа.
+    - На клиентской сборке: хук `transform` анализирует `getModuleInfo(id)` и:
+        - если у модуля есть `dynamicImporters` — он является целью чьего‑то `import()` → тоже корень;
+        - дополнительно продвигает `dynamicallyImportedIds` в корни (дети по динамическим рёбрам).
 
 2. Распространяем «ленивость» вниз по зависимостям
-   - В `resolveId` если импортёр уже внутри ленивого подграфа, то все его дочерние зависимости становятся «ленивыми» тоже.
-   - Для CSS внутри такого подграфа мы не отдаём обычный CSS‑модуль; вместо этого возвращаем виртуальный JS‑модуль (см. п.3).
-   - Для не‑CSS ничего не ломаем: возвращаем исходный `resolvedModule.id` (сохраняются query вида `?url`, `?raw`).
+    - В `resolveId` если импортёр уже внутри ленивого подграфа, то все его дочерние зависимости становятся «ленивыми» тоже.
+    - Для CSS внутри такого подграфа мы не отдаём обычный CSS‑модуль; вместо этого возвращаем виртуальный JS‑модуль (см. п.3).
+    - Для не‑CSS ничего не ломаем: возвращаем исходный `resolvedModule.id` (сохраняются query вида `?url`, `?raw`).
 
 3. Генерируем виртуальные CSS‑модули
-   - На SSR: `load()` возвращает пустой модуль, чтобы стили не попали в общий CSS страницы.
-   - На клиенте: `load()` читает исходный `.css`, при необходимости применяет `postcss-modules` (получаем tokens), минимизирует в проде и генерирует JS‑модуль, который:
-     - импортирует общий рантайм из `lazy-css-inliner:runtime`;
-     - если это обычный CSS — сразу вызывает `ensureLazyCssInjected(id, css)` (синхронная вставка `<style data-lazy-css-id="...">` в `<head>`);
-     - если это CSS Modules — экспортирует `Proxy` над tokens; инъекция выполняется один раз при первом обращении к любому токену.
+    - На SSR: `load()` возвращает пустой модуль, чтобы стили не попали в общий CSS страницы.
+    - На клиенте: `load()` читает исходный `.css`, при необходимости применяет `postcss-modules` (получаем tokens), минимизирует в проде и генерирует JS‑модуль, который:
+        - импортирует общий рантайм из `lazy-css-inliner:runtime`;
+        - если это обычный CSS — сразу вызывает `ensureLazyCssInjected(id, css)` (синхронная вставка `<style data-lazy-css-id="...">` в `<head>`);
+        - если это CSS Modules — экспортирует `Proxy` над tokens; инъекция выполняется один раз при первом обращении к любому токену.
 
 4. Контролируем прелоад зависимостей
-   - В `renderChunk` можно удалять `.css` из массива зависимостей `__vitePreload` (режим `'css'`) либо вычищать все deps (режим `'all'`). Это помогает избежать преждевременных подгрузок.
+    - В `renderChunk` можно удалять `.css` из массива зависимостей `__vitePreload` (режим `'css'`) либо вычищать все deps (режим `'all'`). Это помогает избежать преждевременных подгрузок.
 
 Важно про чанки: виртуальный код CSS может оказаться внутри «родительского» чанка в результате сплиттинга Rollup. Это не приводит к ранней инъекции — вставка стилей происходит только в момент выполнения виртуального модуля (или при первом доступе к токенам CSS Modules). Если нужно жёстко развести домены, используйте `build.rollupOptions.output.manualChunks`.
 
@@ -175,10 +162,20 @@ export interface PluginOptions {
     isDev?: boolean; // dev‑режим
     includedPathes?: string[]; // директории для обработки; по умолчанию [root/src]
     excludedPathes?: string[]; // исключения; по умолчанию ['node_modules']
+    runtimeIsRtlCondition?: string; // опционально: JS‑условие, включающее RTL в рантайме (например, 'window.isRtl')
 }
 ```
 
 Значения по умолчанию подставляются в `configResolved`, если опции не заданы.
+
+## Поддержка RTL
+
+Если задана `runtimeIsRtlCondition`, плагин включает RTL‑режим:
+
+- Дублирует клиентские чанки в подпапку `rtl/`, сохраняя относительные импорты — вложенные динамические импорты автоматически резолвятся внутри `rtl/`.
+- Преобразует инлайн‑CSS в RTL при дублировании через `rtlcss`.
+- Добавляет суффикс `.rtl` к lazy CSS id, чтобы избежать коллизий.
+- Фильтрует зависимости `__vitePreload` так, чтобы в рантайме запрашивались корректные (LTR/RTL) JS и CSS.
 
 ## Диагностика
 

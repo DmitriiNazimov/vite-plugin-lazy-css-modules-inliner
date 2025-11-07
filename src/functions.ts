@@ -2,16 +2,30 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type MagicString from 'magic-string';
 import type { StripPreloadDepsMode, ProcessCssResult, ProcessCssParams } from './types';
-import { CSS_MODULES_PLUGIN_ID, CSS_NANO_PLUGIN_ID, FILTER_CSS_FN, RUNTIME_MODULE_ID } from './constants';
+import {
+    CSS_MODULES_PLUGIN_ID,
+    CSS_NANO_PLUGIN_ID,
+    FILTER_CSS_FN,
+    FILTER_CSS_FN_RTL,
+    RUNTIME_MODULE_ID,
+    MARKER_CSS_START,
+    MARKER_CSS_END,
+    MARKER_ID_START,
+    MARKER_ID_END,
+    RTL_DIR,
+} from './constants';
 import postcss, { type AcceptedPlugin } from 'postcss';
-import postcssModules from 'postcss-modules';
 import cssnano from 'cssnano';
+import structuredClone from '@ungap/structured-clone';
+// @ts-expect-error: no official types for rtlcss
+import rtlcss from 'rtlcss';
+import postcssModules from 'postcss-modules';
 import { readFile } from 'fs/promises';
 import { VIRTUAL_PREFIX } from './constants';
 import type { ResolvedConfig } from 'vite';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import type { RenderedChunk } from 'rollup';
+import type { OutputChunk, RenderedChunk } from 'rollup';
 import loadPostcssConfig from 'postcss-load-config';
 
 // Cache for runtime injector script to avoid reading file multiple times
@@ -66,7 +80,13 @@ export function isAllowPath(id: string | undefined, includedPathes: string[], ex
 // Patch __vitePreload(...) calls to control preloading behavior.
 // - mode 'all': remove all args after the first one
 // - mode 'css': wrap deps array with a filter that drops .css entries
-export function stripPreloadDeps(node: any, code: string, mode: StripPreloadDepsMode, magic: MagicString): void {
+export function stripPreloadDeps(
+    node: any,
+    code: string,
+    mode: StripPreloadDepsMode,
+    magic: MagicString,
+    runtimeIsRtlCondition?: string
+): void {
     const isPreloadCall =
         node &&
         node.type === 'CallExpression' &&
@@ -90,7 +110,8 @@ export function stripPreloadDeps(node: any, code: string, mode: StripPreloadDeps
 
     if (mode === 'css' && depsArg) {
         const src = code.slice(depsArg.start, depsArg.end);
-        const wrapped = `(__deps=>Array.isArray(__deps)?__deps.filter(${FILTER_CSS_FN}):__deps)(${src})`;
+        const filterFn = runtimeIsRtlCondition ? FILTER_CSS_FN_RTL(runtimeIsRtlCondition) : FILTER_CSS_FN;
+        const wrapped = `(__deps=>Array.isArray(__deps)?__deps.filter(${filterFn}):__deps)(${src})`;
         magic.overwrite(depsArg.start, depsArg.end, wrapped);
     }
 }
@@ -119,7 +140,6 @@ export function markDynamicModule(
 export async function processCss({
     originalId,
     cssModulesConfig,
-    isDev,
     postcssPlugins = [],
 }: ProcessCssParams): Promise<ProcessCssResult> {
     const cssSource = await readFile(originalId, 'utf-8');
@@ -139,13 +159,6 @@ export async function processCss({
                 getJSON: (_file: string, json: Record<string, string>) => Object.assign(tokens, json),
             })
         );
-    }
-
-    // Add cssnano if needed. For minification and optimization.
-    const hasUserCssnano = pluginIds.has(CSS_NANO_PLUGIN_ID);
-
-    if (!isDev && !hasUserCssnano) {
-        plugins.push(cssnano({ preset: 'default' }));
     }
 
     const result = await postcss(deduplicatePlugins(plugins)).process(cssSource, { from: originalId });
@@ -175,14 +188,16 @@ export async function generateVirtualModuleCode(
     isDev: boolean
 ): Promise<string> {
     const lazyCssId = getLazyCssId(originalId, isDev, css);
-    const isModule = isCssModuleFile(originalId);
+    const isCssModule = isCssModuleFile(originalId);
     const header = `import { ensureLazyCssInjected, createCssModuleProxy } from ${JSON.stringify(RUNTIME_MODULE_ID)};`;
+    const cssCode = `${MARKER_CSS_START}${css}${MARKER_CSS_END}`;
+    const id = `${MARKER_ID_START}${lazyCssId}${MARKER_ID_END}`;
 
-    if (!isModule) {
+    if (!isCssModule) {
         // Plain CSS side-effect import: inject immediately on evaluation
         return `
     ${header}
-    ensureLazyCssInjected(${JSON.stringify(lazyCssId)}, ${JSON.stringify(css)});
+    ensureLazyCssInjected(${JSON.stringify(id)}, ${JSON.stringify(cssCode)});
     export default {};
   `;
     }
@@ -191,7 +206,7 @@ export async function generateVirtualModuleCode(
     return `
     ${header}
     const __tokens = ${JSON.stringify(tokens)};
-    export default createCssModuleProxy(__tokens, ${JSON.stringify(lazyCssId)}, ${JSON.stringify(css)});
+    export default createCssModuleProxy(__tokens, ${JSON.stringify(id)}, ${JSON.stringify(cssCode)});
   `;
 }
 
@@ -213,23 +228,23 @@ export async function resolvePostcssPlugins(viteConfig: ResolvedConfig): Promise
         try {
             const cwd = path.dirname(postcssConfig);
             const { plugins } = await loadPostcssConfig({}, cwd);
-            return (plugins || []).filter(Boolean);
+            return (plugins || []).filter(filterPostcssPlugins);
         } catch {
             return [];
         }
     }
 
-    return (postcssConfig?.plugins || []).filter(Boolean);
+    return (postcssConfig?.plugins || []).filter(filterPostcssPlugins);
 }
 
 // Compute value for data-lazy-css-id attribute on injected <style> tags.
 // Dev: normalized full path (easy to debug). Prod: basename + short hash from CSS (avoid collisions).
-function getLazyCssId(originalId: string, isDev: boolean, css?: string): string {
+export function getLazyCssId(originalId: string, isDev: boolean, css?: string, isRtl: boolean = false): string {
     if (isDev) {
         return normalizeId(originalId);
     }
 
-    const base = path.basename(originalId);
+    const base = isRtl ? path.basename(originalId.replace('.css', '.rtl.css')) : path.basename(originalId);
 
     if (css && css.length > 0) {
         const hash = createHash('sha1').update(css).digest('base64url').slice(0, 5);
@@ -237,6 +252,65 @@ function getLazyCssId(originalId: string, isDev: boolean, css?: string): string 
     }
 
     return base;
+}
+
+export function escapeJson(str: string) {
+    return JSON.stringify(str).slice(1, -1);
+}
+
+// Helpers for generateBundle
+export function makeReplaceCssLtr(isDev: boolean) {
+    return (_m: string, ltrCssCode: string) => minifyCssWithMarker(ltrCssCode, isDev);
+}
+
+export function makeReplaceCssRtl(isDev: boolean) {
+    return (_m: string, ltrCssCode: string) => {
+        try {
+            const rtlCssCode = postcss([rtlcss()]).process(ltrCssCode, { from: undefined }).css;
+            return minifyCssWithMarker(rtlCssCode, isDev);
+        } catch {
+            return minifyCssWithMarker(ltrCssCode, isDev);
+        }
+    };
+}
+
+export function convertLtrIdToRtl(_full: string, id: string): string {
+    const newId = id.endsWith('.rtl') ? id : `${id}.rtl`;
+    return `${MARKER_ID_START}${newId}${MARKER_ID_END}`;
+}
+
+export function getRtlFileName(fileName: string): string {
+    const parts = fileName.split('/');
+    const base = parts.pop()!;
+    const dir = parts.join('/');
+    return dir ? `${dir}${RTL_DIR}${base}` : `${RTL_DIR}${base}`;
+}
+
+export function createRtlChunk(chunk: OutputChunk, fileName: string, code: string): OutputChunk {
+    return {
+        ...structuredClone(chunk),
+        code,
+        fileName,
+        name: chunk.name + '_rtl',
+        facadeModuleId: chunk.facadeModuleId + '?rtl',
+        moduleIds: Array.from(chunk.moduleIds, (id) => id + '?rtl'),
+    };
+}
+
+const tryToMinifyCss = (css: string, isDev: boolean = false): string => {
+    if (isDev) {
+        return css;
+    }
+
+    try {
+        return postcss([cssnano({ preset: 'default' })]).process(css, { from: undefined }).css;
+    } catch {
+        return css;
+    }
+};
+
+function minifyCssWithMarker(css: string, isDev: boolean): string {
+    return `${MARKER_CSS_START}${escapeJson(tryToMinifyCss(css, isDev))}${MARKER_CSS_END}`;
 }
 
 // Get plugin id to deduplicate PostCSS plugins
@@ -260,3 +334,7 @@ function deduplicatePlugins(plugins: AcceptedPlugin[]): AcceptedPlugin[] {
         return true;
     });
 }
+
+const filterPostcssPlugins = (plugin: AcceptedPlugin | undefined) =>
+    // Exclude cssnano to avoid double-minification; plugin handles minification in generateBundle
+    plugin && getPostcssPluginId(plugin) !== CSS_NANO_PLUGIN_ID;

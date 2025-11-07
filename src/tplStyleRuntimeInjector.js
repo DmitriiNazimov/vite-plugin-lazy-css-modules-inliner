@@ -2,17 +2,20 @@
 // it's inlined into a template literal later and has issues with escaping
 function injectLazyCss(id, css) {
     var map = window.__lazyCssMap || (window.__lazyCssMap = new Map());
-    var styleTag = map.get(id) || document.querySelector('style[data-lazy-css-id="' + id + '"]');
+    var cleanedId = String(id).replace(/__LAZY_ID_(START|END)__/g, '');
+    var styleTag = map.get(cleanedId) || document.querySelector('style[data-lazy-css-id="' + cleanedId + '"]');
 
     if (!styleTag) {
         styleTag = document.createElement('style');
         styleTag.setAttribute('type', 'text/css');
-        styleTag.setAttribute('data-lazy-css-id', id);
+        styleTag.setAttribute('data-lazy-css-id', cleanedId);
         document.head.appendChild(styleTag);
-        map.set(id, styleTag);
+        map.set(cleanedId, styleTag);
     }
-    if (styleTag.textContent !== css) {
-        styleTag.textContent = css;
+
+    const cleanedCss = css.replace(/__LAZY_CSS_(START|END)__/g, '');
+    if (styleTag.textContent !== cleanedCss) {
+        styleTag.textContent = cleanedCss;
     }
 }
 
